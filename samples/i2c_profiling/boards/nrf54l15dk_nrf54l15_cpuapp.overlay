@@ -1,0 +1,46 @@
+/*
+ * Copyright 2024 Nordic Semiconductor ASA
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * Two loopbacks are required:
+ * P1.10 - P1.11
+ * P1.12 - P1.13
+ */
+
+&pinctrl {
+	i2c21_default_alt: i2c21_default_alt {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 1, 10)>,
+				<NRF_PSEL(TWIM_SCL, 1, 12)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c21_sleep_alt: i2c21_sleep_alt {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 1, 10)>,
+				<NRF_PSEL(TWIM_SCL, 1, 12)>;
+			low-power-enable;
+		};
+	};
+};
+
+dut_twim: &i2c21 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	pinctrl-0 = <&i2c21_default_alt>;
+	pinctrl-1 = <&i2c21_sleep_alt>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	zephyr,pm-device-runtime-auto;
+};
+
+&i2c22 {
+	status = "reserved";
+};
+
+stopwatch: &timer21 {
+	status = "reserved";
+};

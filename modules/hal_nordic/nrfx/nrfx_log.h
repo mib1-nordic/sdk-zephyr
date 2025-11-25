@@ -21,8 +21,8 @@ extern "C" {
  * - NRFX_<module>_CONFIG_LOG_LEVEL specifies the severity level of the messages
  *   that are to be output.
  */
-#if !IS_ENABLED(_CONCAT(NRFX_MODULE_PREFIX, _CONFIG_LOG_ENABLED))
-#define NRFX_MODULE_CONFIG_LOG_LEVEL 0
+#if 1 //!IS_ENABLED(_CONCAT(NRFX_MODULE_PREFIX, _CONFIG_LOG_ENABLED))
+#define NRFX_MODULE_CONFIG_LOG_LEVEL 4
 #else
 #define NRFX_MODULE_CONFIG_LOG_LEVEL \
 	_CONCAT(NRFX_MODULE_PREFIX, _CONFIG_LOG_LEVEL)

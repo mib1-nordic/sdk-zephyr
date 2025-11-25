@@ -15,12 +15,28 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/linker/devicetree_regions.h>
 
+#include <hal/nrf_gpio.h>
+
 #include <zephyr/logging/log.h>
 #include <zephyr/irq.h>
 
 #include "i2c_nrfx_twim_common.h"
 
 LOG_MODULE_REGISTER(i2c_nrfx_twim, CONFIG_I2C_LOG_LEVEL);
+
+#define TWIM_PROFILE_TIMINGS 1
+
+#if NRFX_CHECK(TWIM_PROFILE_TIMINGS)
+#define TWIM_PROFILING_PORT NRF_P1
+#define TWIM_PROFILING_PIN  14
+#endif
+#if NRFX_CHECK(TWIM_PROFILE_TIMINGS)
+#define TWIM_PROFILE_PIN_HIGH() nrf_gpio_port_pin_write(TWIM_PROFILING_PORT, TWIM_PROFILING_PIN, 1); (void)nrf_gpio_port_pin_read(TWIM_PROFILING_PORT, TWIM_PROFILING_PIN)
+#define TWIM_PROFILE_PIN_LOW() nrf_gpio_port_pin_write(TWIM_PROFILING_PORT, TWIM_PROFILING_PIN, 0); (void)nrf_gpio_port_pin_read(TWIM_PROFILING_PORT, TWIM_PROFILING_PIN)
+#else
+#define TWIM_PROFILE_PIN_HIGH()
+#define TWIM_PROFILE_PIN_LOW()
+#endif
 
 #if CONFIG_I2C_NRFX_TRANSFER_TIMEOUT
 #define I2C_TRANSFER_TIMEOUT_MSEC K_MSEC(CONFIG_I2C_NRFX_TRANSFER_TIMEOUT)
@@ -43,7 +59,9 @@ int i2c_nrfx_twim_exclusive_access_acquire(const struct device *dev, k_timeout_t
 	ret = k_sem_take(&dev_data->transfer_sync, timeout);
 
 	if (ret == 0) {
+		TWIM_PROFILE_PIN_HIGH();
 		(void)pm_device_runtime_get(dev);
+		TWIM_PROFILE_PIN_LOW();
 	}
 
 	return ret;
@@ -71,10 +89,21 @@ static int i2c_nrfx_twim_transfer(const struct device *dev,
 	uint8_t *buf;
 	uint16_t buf_len;
 
+	TWIM_PROFILE_PIN_HIGH(); // 1H
+	TWIM_PROFILE_PIN_LOW();  // 1L
+	TWIM_PROFILE_PIN_HIGH(); // 2H
+	TWIM_PROFILE_PIN_LOW();  // 2L
+	TWIM_PROFILE_PIN_HIGH(); // 3H
+	TWIM_PROFILE_PIN_LOW();  // 3L
+
 	(void)i2c_nrfx_twim_exclusive_access_acquire(dev, K_FOREVER);
+
+	TWIM_PROFILE_PIN_HIGH(); // 4H, pm take
 
 	/* Dummy take on completion_sync sem to be sure that it is empty */
 	k_sem_take(&dev_data->completion_sync, K_NO_WAIT);
+
+	TWIM_PROFILE_PIN_LOW(); // 4L, completion sync sem
 
 	for (size_t i = 0; i < num_msgs; i++) {
 		if (I2C_MSG_ADDR_10_BITS & msgs[i].flags) {
@@ -83,6 +112,7 @@ static int i2c_nrfx_twim_transfer(const struct device *dev,
 		}
 
 		bool dma_accessible = nrf_dma_accessible_check(&dev_data->twim, msgs[i].buf);
+		TWIM_PROFILE_PIN_HIGH(); // 5H, DMA accessible check
 
 		/* This fragment needs to be merged with the next one if:
 		 * - it is not the last fragment
@@ -134,13 +164,22 @@ static int i2c_nrfx_twim_transfer(const struct device *dev,
 			buf = msg_buf;
 			buf_len = msg_buf_used;
 		}
+
+		TWIM_PROFILE_PIN_LOW(); // 5L, concatenation logic finished
 		ret = i2c_nrfx_twim_msg_transfer(dev, msgs[i].flags, buf, buf_len, addr);
+		TWIM_PROFILE_PIN_HIGH(); // 6H, msg transfer
 		if (ret < 0) {
 			break;
 		}
 
+		// 6L, 7H, 7L, 8H nrfx_twis_irq_handler
+		// 8L, 9H nrfx_twim_irq_handler
+		// 9L, 10H nrfx_twis_irq_handler
+
 		ret = k_sem_take(&dev_data->completion_sync,
 				 I2C_TRANSFER_TIMEOUT_MSEC);
+
+		TWIM_PROFILE_PIN_LOW(); // 10L, data completion sync sem
 		if (ret != 0) {
 			/* Whatever the frequency, completion_sync should have
 			 * been given by the event handler.
@@ -183,14 +222,21 @@ static int i2c_nrfx_twim_transfer(const struct device *dev,
 			}
 
 		}
+		TWIM_PROFILE_PIN_HIGH(); // 11H, concat memcpy 2
+		TWIM_PROFILE_PIN_LOW();  // 11L
 
 		msg_buf_used = 0;
 	}
 
+
 	i2c_nrfx_twim_exclusive_access_release(dev);
+	TWIM_PROFILE_PIN_HIGH(); // 12H, pm put
+	TWIM_PROFILE_PIN_LOW();  // 12L
 
 	return ret;
 }
+
+
 
 static void event_handler(nrfx_twim_event_t const *p_event, void *p_context)
 {
@@ -212,11 +258,19 @@ static void event_handler(nrfx_twim_event_t const *p_event, void *p_context)
 		break;
 	}
 
+	TWIM_PROFILE_PIN_HIGH();
 	k_sem_give(&dev_data->completion_sync);
+	TWIM_PROFILE_PIN_LOW();
 }
 
 static int i2c_nrfx_twim_init(const struct device *dev)
 {
+
+	#if NRFX_CHECK(TWIM_PROFILE_TIMINGS)
+		nrf_gpio_port_pin_write(TWIM_PROFILING_PORT, TWIM_PROFILING_PIN, 0);
+		nrf_gpio_port_pin_output_set(TWIM_PROFILING_PORT, TWIM_PROFILING_PIN);
+	#endif
+
 	struct i2c_nrfx_twim_data *data = dev->data;
 
 	k_sem_init(&data->transfer_sync, 1, 1);
