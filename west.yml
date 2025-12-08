@@ -200,7 +200,8 @@ manifest:
       groups:
         - hal
     - name: hal_nordic
-      revision: 564e754139944286208f3eac122781cec4262392
+      url: https://github.com/mib1-nordic/hal_nordic
+      revision: twim_profiling
       path: modules/hal/nordic
       groups:
         - hal
