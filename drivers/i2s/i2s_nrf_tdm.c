@@ -20,6 +20,23 @@
 #include <soc.h>
 #include <stdlib.h>
 
+volatile int g_reg_writes;
+volatile int g_reg_reads;
+
+// #define TDM_PROFILING_PORT NRF_P1
+// #define TDM_PROFILING_PIN  22
+
+#if defined(HALTIUM_XXAA)
+#define TDM_PROFILING_PORT NRF_P2
+#define TDM_PROFILING_PIN  10
+#else
+#define TDM_PROFILING_PORT NRF_P1
+#define TDM_PROFILING_PIN  22
+#endif
+
+#define TDM_PROFILE_PIN_HIGH() nrf_gpio_port_pin_write(TDM_PROFILING_PORT, TDM_PROFILING_PIN, 1); (void)nrf_gpio_port_pin_read(TDM_PROFILING_PORT, TDM_PROFILING_PIN)
+#define TDM_PROFILE_PIN_LOW() nrf_gpio_port_pin_write(TDM_PROFILING_PORT, TDM_PROFILING_PIN, 0); (void)nrf_gpio_port_pin_read(TDM_PROFILING_PORT, TDM_PROFILING_PIN)
+
 LOG_MODULE_REGISTER(tdm_nrf, CONFIG_I2S_LOG_LEVEL);
 
 /* The application must provide buffers that are to be used in the next
@@ -175,6 +192,13 @@ static nrf_tdm_channels_count_t nrf_tdm_chan_num_get(uint8_t nb_of_channels)
 
 static void tdm_irq_handler(const struct device *dev)
 {
+
+	LOG_DBG("start writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+
+	TDM_PROFILE_PIN_LOW();
+	TDM_PROFILE_PIN_HIGH();
+	TDM_PROFILE_PIN_LOW();
+
 	const struct tdm_drv_cfg *drv_cfg = dev->config;
 	NRF_TDM_Type *p_reg = drv_cfg->p_reg;
 	tdm_ctrl_t *ctrl_data = drv_cfg->control_data;
@@ -182,6 +206,7 @@ static void tdm_irq_handler(const struct device *dev)
 
 	if (nrf_tdm_event_check(p_reg, NRF_TDM_EVENT_MAXCNT)) {
 		nrf_tdm_event_clear(p_reg, NRF_TDM_EVENT_MAXCNT);
+		LOG_DBG("NRF_TDM_EVENT_MAXCNT");
 	}
 	if (nrf_tdm_event_check(p_reg, NRF_TDM_EVENT_TXPTRUPD)) {
 		nrf_tdm_event_clear(p_reg, NRF_TDM_EVENT_TXPTRUPD);
@@ -190,6 +215,7 @@ static void tdm_irq_handler(const struct device *dev)
 		if (ctrl_data->use_tx && ctrl_data->buffers_needed) {
 			ctrl_data->buffers_reused = true;
 		}
+		LOG_DBG("NRF_TDM_EVENT_TXPTRUPD");
 	}
 	if (nrf_tdm_event_check(p_reg, NRF_TDM_EVENT_RXPTRUPD)) {
 		nrf_tdm_event_clear(p_reg, NRF_TDM_EVENT_RXPTRUPD);
@@ -198,22 +224,29 @@ static void tdm_irq_handler(const struct device *dev)
 		if (ctrl_data->use_rx && ctrl_data->buffers_needed) {
 			ctrl_data->buffers_reused = true;
 		}
+		LOG_DBG("NRF_TDM_EVENT_RXPTRUPD");
 	}
+	TDM_PROFILE_PIN_HIGH();
 	if (nrf_tdm_event_check(p_reg, NRF_TDM_EVENT_STOPPED)) {
 		nrf_tdm_event_clear(p_reg, NRF_TDM_EVENT_STOPPED);
 		event_mask |= NRFY_EVENT_TO_INT_BITMASK(NRF_TDM_EVENT_STOPPED);
+
 		nrf_tdm_int_disable(p_reg, NRF_TDM_INT_STOPPED_MASK_MASK);
 		nrf_tdm_disable(p_reg);
 		/* When stopped, release all buffers, including these scheduled for
-		 * the next part of the transfer, and signal that the transfer has
-		 * finished.
-		 */
+		* the next part of the transfer, and signal that the transfer has
+		* finished.
+		*/
 		ctrl_data->handler(&ctrl_data->current_buffers, 0);
 		ctrl_data->handler(&ctrl_data->next_buffers, NRFX_TDM_STATUS_TRANSFER_STOPPED);
+
+		LOG_DBG("NRF_TDM_EVENT_STOPPED");
 	} else {
 		/* Check if the requested transfer has been completed:
 		 * - full-duplex mode
 		 */
+		LOG_DBG("else");
+
 		if ((ctrl_data->use_tx && ctrl_data->use_rx && ctrl_data->tx_ready &&
 		     ctrl_data->rx_ready) ||
 		    /* - TX only mode */
@@ -256,6 +289,9 @@ static void tdm_irq_handler(const struct device *dev)
 			}
 		}
 	}
+
+	LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+	TDM_PROFILE_PIN_HIGH();
 }
 
 static uint32_t div_calculate(uint32_t src_freq, uint32_t requested_clk_freq)
@@ -278,25 +314,32 @@ static uint32_t div_calculate(uint32_t src_freq, uint32_t requested_clk_freq)
 
 static bool get_next_tx_buffer(struct tdm_drv_data *drv_data, tdm_buffers_t *buffers)
 {
+	TDM_PROFILE_PIN_LOW();
+
 	struct tdm_buf buf;
 	int ret = k_msgq_get(&drv_data->tx_queue, &buf, K_NO_WAIT);
 
 	if (ret != 0) {
+		TDM_PROFILE_PIN_HIGH();
 		return false;
 	}
 	buffers->p_tx_buffer = buf.dmm_buf;
 	buffers->p_tx_mem_slab = buf.mem_block;
 	buffers->buffer_size = buf.size / sizeof(uint32_t);
+
+	TDM_PROFILE_PIN_HIGH();
 	return true;
 }
 
 static bool get_next_rx_buffer(struct tdm_drv_data *drv_data, tdm_buffers_t *buffers)
 {
+	TDM_PROFILE_PIN_LOW();
 	const struct tdm_drv_cfg *drv_cfg = drv_data->drv_cfg;
 	int ret = k_mem_slab_alloc(drv_data->rx.cfg.mem_slab, &buffers->p_rx_mem_slab, K_NO_WAIT);
 
 	if (ret < 0) {
 		LOG_ERR("Failed to allocate next RX buffer: %d", ret);
+		TDM_PROFILE_PIN_HIGH();
 		return false;
 	}
 	ret = dmm_buffer_in_prepare(drv_cfg->mem_reg, buffers->p_rx_mem_slab,
@@ -304,19 +347,24 @@ static bool get_next_rx_buffer(struct tdm_drv_data *drv_data, tdm_buffers_t *buf
 				    (void **)&buffers->p_rx_buffer);
 	if (ret < 0) {
 		LOG_ERR("Failed to prepare buffer: %d", ret);
+		TDM_PROFILE_PIN_HIGH();
 		return false;
 	}
-
+	TDM_PROFILE_PIN_HIGH();
 	return true;
 }
 
 static void free_tx_buffer(struct tdm_drv_data *drv_data, struct tdm_buf *buf)
 {
+	TDM_PROFILE_PIN_LOW();
+
 	const struct tdm_drv_cfg *drv_cfg = drv_data->drv_cfg;
 
 	(void)dmm_buffer_out_release(drv_cfg->mem_reg, buf->dmm_buf);
 	k_mem_slab_free(drv_data->tx.cfg.mem_slab, buf->mem_block);
-	LOG_DBG("Freed TX %p", buf->mem_block);
+	LOG_DBG("Freed TX %p", (void *)buf->mem_block);
+
+	TDM_PROFILE_PIN_HIGH();
 }
 
 static void free_rx_buffer(struct tdm_drv_data *drv_data, struct tdm_buf *buf)
@@ -325,7 +373,8 @@ static void free_rx_buffer(struct tdm_drv_data *drv_data, struct tdm_buf *buf)
 
 	(void)dmm_buffer_in_release(drv_cfg->mem_reg, buf->mem_block, buf->size, buf->dmm_buf);
 	k_mem_slab_free(drv_data->rx.cfg.mem_slab, buf->mem_block);
-	LOG_DBG("Freed RX %p", buf->mem_block);
+
+	LOG_DBG("Freed RX %p", (void *)buf->mem_block);
 }
 
 static void tdm_start(struct tdm_drv_data *drv_data, tdm_buffers_t const *p_initial_buffers)
@@ -372,6 +421,7 @@ static void tdm_start(struct tdm_drv_data *drv_data, tdm_buffers_t const *p_init
 
 static void tdm_stop(NRF_TDM_Type *p_reg)
 {
+	LOG_DBG("triggering task stop");
 	nrf_tdm_int_disable(p_reg, NRF_TDM_INT_RXPTRUPD_MASK_MASK | NRF_TDM_INT_TXPTRUPD_MASK_MASK);
 
 	nrf_tdm_task_trigger(p_reg, NRF_TDM_TASK_STOP);
@@ -401,6 +451,7 @@ static bool next_buffers_set(struct tdm_drv_data *drv_data, tdm_buffers_t const 
 
 static bool supply_next_buffers(struct tdm_drv_data *drv_data, tdm_buffers_t *next)
 {
+	TDM_PROFILE_PIN_LOW();
 	const struct tdm_drv_cfg *drv_cfg = drv_data->drv_cfg;
 
 	if (drv_data->active_dir != I2S_DIR_TX) { /* -> RX active */
@@ -420,8 +471,11 @@ static bool supply_next_buffers(struct tdm_drv_data *drv_data, tdm_buffers_t *ne
 	drv_data->last_tx_buffer = next->p_tx_buffer;
 	drv_data->last_tx_mem_slab = next->p_tx_mem_slab;
 
-	LOG_DBG("Next buffers: %p/%p", next->p_tx_buffer, next->p_rx_buffer);
-	return next_buffers_set(drv_data, next);
+	LOG_DBG("Next buffers: %p/%p", (void *)next->p_tx_buffer, (void *)next->p_rx_buffer);
+	bool ret = next_buffers_set(drv_data, next);
+
+	TDM_PROFILE_PIN_HIGH();
+	return ret;
 }
 
 static void purge_queue(const struct device *dev, enum i2s_dir dir)
@@ -453,6 +507,9 @@ static void tdm_uninit(struct tdm_drv_data *drv_data)
 static int tdm_nrf_configure(const struct device *dev, enum i2s_dir dir,
 			     const struct i2s_config *tdm_cfg)
 {
+	LOG_DBG("start writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+
+	TDM_PROFILE_PIN_HIGH();
 	nrf_tdm_config_t nrfx_cfg;
 	struct tdm_drv_data *drv_data = dev->data;
 	const struct tdm_drv_cfg *drv_cfg = dev->config;
@@ -617,6 +674,8 @@ static int tdm_nrf_configure(const struct device *dev, enum i2s_dir dir,
 		drv_data->rx.nrfx_cfg = nrfx_cfg;
 		drv_data->rx_configured = true;
 	}
+	TDM_PROFILE_PIN_LOW();
+	LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 	return 0;
 }
 
@@ -636,6 +695,9 @@ static const struct i2s_config *tdm_nrf_config_get(const struct device *dev, enu
 
 static int tdm_nrf_read(const struct device *dev, void **mem_block, size_t *size)
 {
+	LOG_DBG("start writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+	TDM_PROFILE_PIN_HIGH();
+
 	struct tdm_drv_data *drv_data = dev->data;
 	const struct tdm_drv_cfg *drv_cfg = drv_data->drv_cfg;
 	struct tdm_buf buf;
@@ -653,18 +715,22 @@ static int tdm_nrf_read(const struct device *dev, void **mem_block, size_t *size
 		return -EIO;
 	}
 
-	LOG_DBG("Released RX %p", buf.mem_block);
+	LOG_DBG("Released RX %p", (void *)buf.mem_block);
 
 	if (ret == 0) {
-		(void)dmm_buffer_in_release(drv_cfg->mem_reg, buf.mem_block, buf.size, buf.dmm_buf);
+		dmm_buffer_in_release(drv_cfg->mem_reg, buf.mem_block, buf.size, buf.dmm_buf);
 		*mem_block = buf.mem_block;
 		*size = buf.size;
 	}
+	LOG_DBG("ned writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+	TDM_PROFILE_PIN_LOW();
 	return ret;
 }
 
 static int tdm_nrf_write(const struct device *dev, void *mem_block, size_t size)
 {
+	LOG_DBG("start writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+
 	struct tdm_drv_data *drv_data = dev->data;
 	const struct tdm_drv_cfg *drv_cfg = dev->config;
 	struct tdm_buf buf = {.mem_block = mem_block, .size = size};
@@ -692,10 +758,17 @@ static int tdm_nrf_write(const struct device *dev, void *mem_block, size_t size)
 		return -EIO;
 	}
 
+	TDM_PROFILE_PIN_HIGH();
 	ret = dmm_buffer_out_prepare(drv_cfg->mem_reg, buf.mem_block, buf.size,
 				     (void **)&buf.dmm_buf);
+
+	TDM_PROFILE_PIN_LOW();
 	ret = k_msgq_put(&drv_data->tx_queue, &buf, SYS_TIMEOUT_MS(drv_data->tx.cfg.timeout));
+	TDM_PROFILE_PIN_HIGH();
+
 	if (ret < 0) {
+		LOG_DBG("writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+		TDM_PROFILE_PIN_LOW();
 		return ret;
 	}
 
@@ -713,19 +786,26 @@ static int tdm_nrf_write(const struct device *dev, void *mem_block, size_t size)
 			 * responsible for releasing the buffer.
 			 */
 			LOG_ERR("Cannot reacquire queued buffer");
+			LOG_DBG("writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+			TDM_PROFILE_PIN_LOW();
 			return 0;
 		}
 
 		drv_data->next_tx_buffer_needed = false;
 
-		LOG_DBG("Next TX %p", next.p_tx_buffer);
+		LOG_DBG("Next TX %p", (void *)next.p_tx_buffer);
 
 		if (!supply_next_buffers(drv_data, &next)) {
 			LOG_ERR("Cannot supply buffer");
+			LOG_DBG("writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+			TDM_PROFILE_PIN_LOW();
 			return -EIO;
 		}
 	}
+	TDM_PROFILE_PIN_LOW();
+	LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 	return 0;
+
 }
 
 static int start_transfer(struct tdm_drv_data *drv_data)
@@ -870,6 +950,9 @@ static int trigger_start(const struct device *dev)
 
 static int tdm_nrf_trigger(const struct device *dev, enum i2s_dir dir, enum i2s_trigger_cmd cmd)
 {
+	LOG_DBG("start writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+	TDM_PROFILE_PIN_HIGH();
+
 	struct tdm_drv_data *drv_data = dev->data;
 	const struct tdm_drv_cfg *drv_cfg = dev->config;
 	bool configured = false;
@@ -950,23 +1033,34 @@ static int tdm_nrf_trigger(const struct device *dev, enum i2s_dir dir, enum i2s_
 		return -EINVAL;
 	}
 
+	int ret;
+
 	switch (cmd) {
 	case I2S_TRIGGER_START:
 		drv_data->stop = false;
 		drv_data->discard_rx = false;
 		drv_data->active_dir = dir;
 		drv_data->next_tx_buffer_needed = false;
-		return trigger_start(dev);
+		ret = trigger_start(dev);
+		TDM_PROFILE_PIN_LOW();
+		LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
+		return ret;
 
 	case I2S_TRIGGER_STOP:
 		drv_data->state = I2S_STATE_STOPPING;
 		drv_data->stop = true;
+
+		TDM_PROFILE_PIN_LOW();
+		LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 		return 0;
 
 	case I2S_TRIGGER_DRAIN:
 		drv_data->state = I2S_STATE_STOPPING;
 		/* If only RX is active, DRAIN is equivalent to STOP. */
 		drv_data->stop = (drv_data->active_dir == I2S_DIR_RX);
+
+		TDM_PROFILE_PIN_LOW();
+		LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 		return 0;
 
 	case I2S_TRIGGER_DROP:
@@ -976,21 +1070,31 @@ static int tdm_nrf_trigger(const struct device *dev, enum i2s_dir dir, enum i2s_
 		}
 		purge_queue(dev, dir);
 		drv_data->state = I2S_STATE_READY;
+		TDM_PROFILE_PIN_LOW();
+		LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 		return 0;
 
 	case I2S_TRIGGER_PREPARE:
 		purge_queue(dev, dir);
 		drv_data->state = I2S_STATE_READY;
+
+		TDM_PROFILE_PIN_LOW();
+		LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 		return 0;
 
 	default:
 		LOG_ERR("Invalid trigger: %d", cmd);
+		LOG_DBG("end writes: %d, reads: %d", g_reg_writes, g_reg_reads);
 		return -EINVAL;
 	}
 }
 
 static void data_handler(const struct device *dev, const tdm_buffers_t *released, uint32_t status)
 {
+	TDM_PROFILE_PIN_LOW();
+	TDM_PROFILE_PIN_HIGH();
+	LOG_DBG("data_handler");
+
 	struct tdm_drv_data *drv_data = dev->data;
 	const struct tdm_drv_cfg *drv_cfg = dev->config;
 	bool stop_transfer = false;
@@ -1042,6 +1146,11 @@ static void data_handler(const struct device *dev, const tdm_buffers_t *released
 			drv_data->state = I2S_STATE_ERROR;
 		}
 		tdm_stop(drv_cfg->p_reg);
+
+		// TDM_PROFILE_PIN_LOW();
+		// TDM_PROFILE_PIN_HIGH();
+		TDM_PROFILE_PIN_LOW();
+		tdm_stop(drv_cfg->p_reg);
 		return;
 	}
 	if (released->p_rx_buffer) {
@@ -1050,13 +1159,14 @@ static void data_handler(const struct device *dev, const tdm_buffers_t *released
 		if (drv_data->discard_rx) {
 			free_rx_buffer(drv_data, &buf);
 		} else {
+			TDM_PROFILE_PIN_LOW();
 			int ret = k_msgq_put(&drv_data->rx_queue, &buf, K_NO_WAIT);
+			TDM_PROFILE_PIN_HIGH();
 
 			if (ret < 0) {
 				LOG_ERR("No room in RX queue");
 				drv_data->state = I2S_STATE_ERROR;
 				stop_transfer = true;
-
 				free_rx_buffer(drv_data, &buf);
 			} else {
 
@@ -1087,6 +1197,7 @@ static void data_handler(const struct device *dev, const tdm_buffers_t *released
 	}
 
 	if (stop_transfer) {
+		LOG_DBG("c");
 		tdm_stop(drv_cfg->p_reg);
 	} else if (status & NRFX_TDM_STATUS_NEXT_BUFFERS_NEEDED) {
 		tdm_buffers_t next = {0};
@@ -1125,11 +1236,13 @@ static void data_handler(const struct device *dev, const tdm_buffers_t *released
 				 * Defer it to when the user writes more data.
 				 */
 				drv_data->next_tx_buffer_needed = true;
+				TDM_PROFILE_PIN_LOW();
 				return;
 			}
 		}
 		(void)supply_next_buffers(drv_data, &next);
 	}
+	TDM_PROFILE_PIN_LOW();
 }
 
 static void clock_manager_init(const struct device *dev)
@@ -1158,6 +1271,10 @@ static void clock_manager_init(const struct device *dev)
 
 static int data_init(const struct device *dev)
 {
+	LOG_DBG("data_init");
+	nrf_gpio_port_pin_write(TDM_PROFILING_PORT, TDM_PROFILING_PIN, 0);
+	nrf_gpio_port_pin_output_set(TDM_PROFILING_PORT, TDM_PROFILING_PIN);
+
 	struct tdm_drv_data *drv_data = dev->data;
 	const struct tdm_drv_cfg *drv_cfg = dev->config;
 

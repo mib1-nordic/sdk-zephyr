@@ -264,6 +264,17 @@ static void dmm_memcpy(void *dst, const void *src, size_t len)
 	memcpy(dst, src, len);
 }
 
+#include <haly/nrfy_gpio.h>
+#if defined(HALTIUM_XXAA)
+#define TDM_PROFILING_PORT NRF_P2
+#define TDM_PROFILING_PIN  10
+#else
+#define TDM_PROFILING_PORT NRF_P1
+#define TDM_PROFILING_PIN  22
+#endif
+#define TDM_PROFILE_PIN_HIGH() nrf_gpio_port_pin_write(TDM_PROFILING_PORT, TDM_PROFILING_PIN, 1); (void)nrf_gpio_port_pin_read(TDM_PROFILING_PORT, TDM_PROFILING_PIN)
+#define TDM_PROFILE_PIN_LOW() nrf_gpio_port_pin_write(TDM_PROFILING_PORT, TDM_PROFILING_PIN, 0); (void)nrf_gpio_port_pin_read(TDM_PROFILING_PORT, TDM_PROFILING_PIN)
+
 int dmm_buffer_out_prepare(void *region, void const *user_buffer, size_t user_length,
 			   void **buffer_out)
 {
@@ -290,17 +301,20 @@ int dmm_buffer_out_prepare(void *region, void const *user_buffer, size_t user_le
 		/* If yes, assign buffer_out to user_buffer*/
 		*buffer_out = (void *)user_buffer;
 	} else {
+		// TDM_PROFILE_PIN_LOW();
 		/* If no:
 		 * - dynamically allocate buffer in correct memory region that respects cache line
 		 *   alignment and padding
 		 */
 		*buffer_out = dmm_buffer_alloc(dh, user_length);
+		// TDM_PROFILE_PIN_HIGH();
 		/* Return error if dynamic allocation fails */
 		if (*buffer_out == NULL) {
 			return -ENOMEM;
 		}
 		/* - copy user buffer contents into allocated buffer */
 		dmm_memcpy(*buffer_out, user_buffer, user_length);
+		TDM_PROFILE_PIN_LOW();
 	}
 
 	/* Check if device memory region is cacheable
@@ -311,7 +325,7 @@ int dmm_buffer_out_prepare(void *region, void const *user_buffer, size_t user_le
 		sys_cache_data_flush_range(*buffer_out, user_length);
 	}
 	/* If no, no action is needed */
-
+	// TDM_PROFILE_PIN_HIGH();
 	return 0;
 }
 
